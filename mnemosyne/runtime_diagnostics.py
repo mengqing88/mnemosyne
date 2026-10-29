@@ -6,15 +6,80 @@ capabilities without importing the mutable ``mnemosyne.diagnose`` command.
 """
 
 import importlib.metadata
+import json
 import platform
 import sqlite3
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any
 
 
-def collect_runtime_diagnostics() -> dict[str, Any]:
+def _collect_target_runtime_diagnostics(python_executable: str) -> dict[str, Any]:
+    executable = str(Path(python_executable).expanduser())
+    display_name = Path(executable).name or "python"
+    script = (
+        "import json; "
+        "from mnemosyne.runtime_diagnostics import collect_runtime_diagnostics; "
+        "print('MNEMOSYNE_DIAGNOSTICS=' + json.dumps(collect_runtime_diagnostics()))"
+    )
+    try:
+        result = subprocess.run(
+            [executable, "-I", "-c", script],
+            capture_output=True,
+            text=True,
+            timeout=120,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        result = None
+
+    payload = None
+    if result is not None and result.returncode == 0:
+        for line in reversed(result.stdout.splitlines()):
+            if line.startswith("MNEMOSYNE_DIAGNOSTICS="):
+                try:
+                    payload = json.loads(line.partition("=")[2])
+                except json.JSONDecodeError:
+                    pass
+                break
+
+    if not isinstance(payload, dict) or not isinstance(payload.get("checks"), list):
+        return {
+            "status": "unavailable",
+            "checks": [
+                {
+                    "category": "runtime",
+                    "check": "target_interpreter",
+                    "status": "ERROR",
+                    "detail": "selected interpreter could not run Mnemosyne diagnostics",
+                }
+            ],
+            "scope": "target_interpreter",
+            "executable": display_name,
+            "unavailable": True,
+        }
+
+    executable_check = next(
+        (
+            check
+            for check in payload["checks"]
+            if isinstance(check, dict) and check.get("check") == "python_executable"
+        ),
+        {},
+    )
+    executable_name = str(executable_check.get("detail") or display_name)
+    executable_name = executable_name.replace("\\", "/").rsplit("/", 1)[-1]
+    payload["scope"] = "target_interpreter"
+    payload["executable"] = executable_name
+    return payload
+
+
+def collect_runtime_diagnostics(python_executable: str | None = None) -> dict[str, Any]:
     """Run pure runtime, dependency, and capability checks without a provider."""
+
+    if python_executable is not None:
+        return _collect_target_runtime_diagnostics(python_executable)
 
     checks: list[dict[str, str]] = []
 

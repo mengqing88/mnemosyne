@@ -14,6 +14,7 @@ import importlib.metadata  # noqa: F401  (monkeypatched by tests; runtime_diagno
 import json
 import os
 import subprocess
+import sys
 from datetime import datetime
 from pathlib import Path
 
@@ -151,7 +152,13 @@ def _sqlite_integrity_diagnostics(conn) -> dict[str, str]:
     return {"quick_check": result, "detail": ""}
 
 
-def run_diagnostics(*, repair_vec_working: bool = False, dry_run: bool = False, bank: str | None = None) -> dict:
+def run_diagnostics(
+    *,
+    repair_vec_working: bool = False,
+    dry_run: bool = False,
+    bank: str | None = None,
+    python_executable: str | None = None,
+) -> dict:
     """
     Run full diagnostic scan and write PII-safe log.
     Returns summary dict for display.
@@ -164,8 +171,11 @@ def run_diagnostics(*, repair_vec_working: bool = False, dry_run: bool = False, 
         bank: Optional named bank to diagnose. When provided, diagnostics run
             against the bank's own SQLite DB (data/banks/<bank>/mnemosyne.db).
             When None, the default/profile-root DB is used.
+        python_executable: Optional explicit interpreter used for runtime checks.
     """
     log_path = _log_path()
+    if python_executable is not None:
+        python_executable = os.path.expanduser(python_executable)
     entries: list[dict] = []
     resolved_bank: str | None = None
     resolved_db: str | None = None
@@ -182,8 +192,19 @@ def run_diagnostics(*, repair_vec_working: bool = False, dry_run: bool = False, 
         return entry
 
     # --- Pure runtime/dependency/capability checks (no provider construction) ---
-    for check in collect_runtime_diagnostics()["checks"]:
-        log(check["category"], check["check"], check["status"], check["detail"])
+    if python_executable is None:
+        runtime = collect_runtime_diagnostics()
+        runtime_scope = "cli_interpreter"
+        runtime_executable = Path(sys.executable).name
+    else:
+        runtime = collect_runtime_diagnostics(python_executable)
+        runtime_scope = runtime.get("scope", "target_interpreter")
+        runtime_executable = runtime.get("executable", Path(python_executable).name)
+    for check in runtime["checks"]:
+        entry = log(check["category"], check["check"], check["status"], check["detail"])
+        entry["scope"] = runtime_scope
+    log("env", "checks_scope", "OK", runtime_scope)
+    log("env", "checks_executable", "OK", runtime_executable)
 
     # --- Database state ---
     try:
@@ -310,6 +331,8 @@ def run_diagnostics(*, repair_vec_working: bool = False, dry_run: bool = False, 
         "entries": entries,
         "resolved_bank": resolved_bank,
         "resolved_db": resolved_db,
+        "runtime_scope": runtime_scope,
+        "runtime_executable": runtime_executable,
     }
 
     # Auto-detect common problems
@@ -344,28 +367,33 @@ def run_diagnostics(*, repair_vec_working: bool = False, dry_run: bool = False, 
                     f"Hygiene scan flagged {hygiene_noise_with_secrets['status']} rows with possible secrets - review before sharing/export"
                 )
 
-    if not embed_ok:
-        summary["key_findings"].append("fastembed not available - install with: pip install mnemosyne-memory[embeddings]")
-        summary["fixable"].append("fastembed")
-    if not vec_ok:
-        summary["key_findings"].append("sqlite-vec not available - install with: pip install sqlite-vec")
-        summary["fixable"].append("sqlite_vec")
-    if embed_ok and vec_ok and ep_vec and ep_vec["status"] == "0":
+    if runtime.get("unavailable"):
         summary["key_findings"].append(
-            "Both fastembed and sqlite-vec are available but episodic vectors=0 - "
-            "memories may not have been consolidated yet. Use the mnemosyne_sleep "
-            "tool or call BeamMemory.sleep()."
+            f"Could not run diagnostics in the selected Python ({runtime_executable}); dependency status is unknown."
         )
-    if embed_ok and vec_ok and ep_vec and int(ep_vec["status"]) > 0:
-        vtype = ep_vec_type["status"] if ep_vec_type else "unknown"
-        msg = f"Semantic search is active with {ep_vec['status']} vectors in episodic memory (backend: {vtype})"
-        if vtype in ("binary", "json"):
-            # vec_episodes (the sqlite-vec ANN table) is absent -- usually
-            # because this Python's sqlite3 can't load the sqlite-vec
-            # extension. Recall still works via the binary/JSON fallback;
-            # the ANN index only matters at much larger scale.
-            msg += " - the sqlite-vec ANN index is not in use (extension not loadable); the fallback is fine at small/medium scale"
-        summary["key_findings"].append(msg)
+    else:
+        if not embed_ok:
+            summary["key_findings"].append("fastembed not available - install with: pip install mnemosyne-memory[embeddings]")
+            summary["fixable"].append("fastembed")
+        if not vec_ok:
+            summary["key_findings"].append("sqlite-vec not available - install with: pip install sqlite-vec")
+            summary["fixable"].append("sqlite_vec")
+        if embed_ok and vec_ok and ep_vec and ep_vec["status"] == "0":
+            summary["key_findings"].append(
+                "Both fastembed and sqlite-vec are available but episodic vectors=0 - "
+                "memories may not have been consolidated yet. Use the mnemosyne_sleep "
+                "tool or call BeamMemory.sleep()."
+            )
+        if embed_ok and vec_ok and ep_vec and int(ep_vec["status"]) > 0:
+            vtype = ep_vec_type["status"] if ep_vec_type else "unknown"
+            msg = f"Semantic search is active with {ep_vec['status']} vectors in episodic memory (backend: {vtype})"
+            if vtype in ("binary", "json"):
+                # vec_episodes (the sqlite-vec ANN table) is absent -- usually
+                # because this Python's sqlite3 can't load the sqlite-vec
+                # extension. Recall still works via the binary/JSON fallback;
+                # the ANN index only matters at much larger scale.
+                msg += " - the sqlite-vec ANN index is not in use (extension not loadable); the fallback is fine at small/medium scale"
+            summary["key_findings"].append(msg)
 
     if vec_working_repair_status:
         inserted = vec_working_repair_inserted["status"] if vec_working_repair_inserted else "0"
@@ -393,7 +421,11 @@ def run_diagnostics(*, repair_vec_working: bool = False, dry_run: bool = False, 
     return summary
 
 
-def auto_fix(entries: list[dict] | None = None, dry_run: bool = False) -> dict:
+def auto_fix(
+    entries: list[dict] | None = None,
+    dry_run: bool = False,
+    python_executable: str | None = None,
+) -> dict:
     """
     Auto-install missing dependencies detected by diagnostics.
 
@@ -405,10 +437,25 @@ def auto_fix(entries: list[dict] | None = None, dry_run: bool = False) -> dict:
         Dict with 'fixed', 'failed', 'skipped' lists and 'ran' bool.
     """
     if entries is None:
-        summary = run_diagnostics()
+        if python_executable is None:
+            summary = run_diagnostics()
+        else:
+            summary = run_diagnostics(python_executable=python_executable)
         entries = summary.get("entries", [])
 
     result = {"fixed": [], "failed": [], "skipped": [], "ran": True}
+
+    if any(
+        entry.get("check") == "target_interpreter" and entry.get("status") == "ERROR"
+        for entry in entries
+    ):
+        result["failed"].append(
+            {
+                "label": "target Python",
+                "error": "diagnostics could not run in the selected interpreter",
+            }
+        )
+        return result
 
     for fix_key, fix_info in FIX_MAP.items():
         # Check if this dependency is MISSING
@@ -418,9 +465,15 @@ def auto_fix(entries: list[dict] | None = None, dry_run: bool = False) -> dict:
 
         label = fix_info["label"]
         cmd = fix_info["install"]
+        if python_executable is not None:
+            python_executable = str(Path(python_executable).expanduser())
+            cmd = [python_executable, "-m", "pip", *cmd[1:]]
 
         if dry_run:
-            result["fixed"].append(f"WOULD install: {label} ({' '.join(cmd)})")
+            shown_cmd = cmd
+            if python_executable is not None:
+                shown_cmd = [Path(python_executable).name, *cmd[1:]]
+            result["fixed"].append(f"WOULD install: {label} ({' '.join(shown_cmd)})")
             continue
 
         print(f"🔧 Installing {label}...")
@@ -445,12 +498,22 @@ if __name__ == "__main__":
     parser.add_argument("--dry-run", action="store_true", help="Show what would be fixed/repaired without writing")
     parser.add_argument("--repair-vec-working", action="store_true", help="Backfill missing vec_working rows from memory_embeddings")
     parser.add_argument("--bank", type=str, default=None, help="Mnemosyme bank to diagnose (default: profile-root DB)")
+    parser.add_argument("--python", dest="python_executable", help="Run runtime checks with this Python interpreter")
     args = parser.parse_args()
 
-    result = run_diagnostics(repair_vec_working=args.repair_vec_working, dry_run=args.dry_run, bank=args.bank)
+    result = run_diagnostics(
+        repair_vec_working=args.repair_vec_working,
+        dry_run=args.dry_run,
+        bank=args.bank,
+        python_executable=args.python_executable,
+    )
     print(json.dumps(result, indent=2))
 
     if args.fix or (args.dry_run and not args.repair_vec_working):
-        fix_result = auto_fix(result.get("entries", []), dry_run=args.dry_run)
+        fix_result = auto_fix(
+            result.get("entries", []),
+            dry_run=args.dry_run,
+            python_executable=args.python_executable,
+        )
         print("\n--- Auto-fix ---")
         print(json.dumps(fix_result, indent=2))
