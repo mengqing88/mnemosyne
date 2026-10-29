@@ -641,6 +641,12 @@ mnemosyne doctor --bank default --format both
 mnemosyne repair --report mnemosyne-doctor.json --select working_memory:<ID> --dry-run
 ```
 
+JSON import restores working-memory rows but does not regenerate their vectors,
+so imported working memories are unavailable to vector-based recall. Episodic
+embeddings are restored from the `episodic_embeddings` section when it is
+present and the importing runtime has `sqlite-vec` support. Use `mnemosyne store`
+for memories that need working-memory vector indexing.
+
 For a database containing sqlite-vec `vec0` tables, install the optional
 `embeddings` extra (or compatible `sqlite-vec`) in the **same runtime** for
 Doctor and repair, then generate a fresh report on the offline copy. Without
