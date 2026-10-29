@@ -373,10 +373,20 @@ def run_diagnostics(
         )
     else:
         if not embed_ok:
-            summary["key_findings"].append("fastembed not available - install with: pip install mnemosyne-memory[embeddings]")
+            install_command = (
+                "the selected Python -m pip install mnemosyne-memory[embeddings]"
+                if python_executable is not None
+                else "pip install mnemosyne-memory[embeddings]"
+            )
+            summary["key_findings"].append(f"fastembed not available - install with: {install_command}")
             summary["fixable"].append("fastembed")
         if not vec_ok:
-            summary["key_findings"].append("sqlite-vec not available - install with: pip install sqlite-vec")
+            install_command = (
+                "the selected Python -m pip install sqlite-vec"
+                if python_executable is not None
+                else "pip install sqlite-vec"
+            )
+            summary["key_findings"].append(f"sqlite-vec not available - install with: {install_command}")
             summary["fixable"].append("sqlite_vec")
         if embed_ok and vec_ok and ep_vec and ep_vec["status"] == "0":
             summary["key_findings"].append(
@@ -466,7 +476,7 @@ def auto_fix(
         label = fix_info["label"]
         cmd = fix_info["install"]
         if python_executable is not None:
-            python_executable = str(Path(python_executable).expanduser())
+            python_executable = os.path.abspath(os.path.expanduser(python_executable))
             cmd = [python_executable, "-m", "pip", *cmd[1:]]
 
         if dry_run:
@@ -478,7 +488,7 @@ def auto_fix(
 
         print(f"🔧 Installing {label}...")
         try:
-            subprocess.run(cmd, check=True, capture_output=True, text=True)
+            subprocess.run(cmd, check=True, capture_output=True, text=True, errors="replace")
             result["fixed"].append(label)
             print(f"   ✅ {label} installed")
         except subprocess.CalledProcessError as e:

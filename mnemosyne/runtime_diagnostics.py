@@ -7,6 +7,7 @@ capabilities without importing the mutable ``mnemosyne.diagnose`` command.
 
 import importlib.metadata
 import json
+import os
 import platform
 import sqlite3
 import subprocess
@@ -16,7 +17,7 @@ from typing import Any
 
 
 def _collect_target_runtime_diagnostics(python_executable: str) -> dict[str, Any]:
-    executable = str(Path(python_executable).expanduser())
+    executable = os.path.abspath(os.path.expanduser(python_executable))
     display_name = Path(executable).name or "python"
     script = (
         "import json; "
@@ -28,6 +29,7 @@ def _collect_target_runtime_diagnostics(python_executable: str) -> dict[str, Any
             [executable, "-I", "-c", script],
             capture_output=True,
             text=True,
+            errors="replace",
             timeout=120,
             check=False,
         )
@@ -44,7 +46,15 @@ def _collect_target_runtime_diagnostics(python_executable: str) -> dict[str, Any
                     pass
                 break
 
-    if not isinstance(payload, dict) or not isinstance(payload.get("checks"), list):
+    required_keys = {"category", "check", "status", "detail"}
+    if (
+        not isinstance(payload, dict)
+        or not isinstance(payload.get("checks"), list)
+        or not all(
+            isinstance(check, dict) and required_keys <= check.keys()
+            for check in payload["checks"]
+        )
+    ):
         return {
             "status": "unavailable",
             "checks": [

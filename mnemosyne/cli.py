@@ -378,7 +378,14 @@ def cmd_diagnose(args):
     python_executable = None
     i = 0
     while i < len(args):
-        if args[i] == "--python":
+        if args[i] == "--python" or args[i].startswith("--python="):
+            if args[i].startswith("--python="):
+                value = args[i].partition("=")[2]
+                if not value:
+                    _fail("--python requires a value")
+                python_executable = value
+                i += 1
+                continue
             python_executable, i = _require_value(args, i, "--python", lambda value, _name: value)
         else:
             i += 1
