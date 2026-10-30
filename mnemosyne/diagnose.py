@@ -18,7 +18,10 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-from mnemosyne.runtime_diagnostics import collect_runtime_diagnostics
+from mnemosyne.runtime_diagnostics import (
+    collect_runtime_diagnostics,
+    resolve_python_executable,
+)
 
 def _default_log_dir() -> Path:
     """Resolve diagnostics beside the active Hermes home."""
@@ -476,7 +479,7 @@ def auto_fix(
         label = fix_info["label"]
         cmd = fix_info["install"]
         if python_executable is not None:
-            python_executable = os.path.abspath(os.path.expanduser(python_executable))
+            python_executable = resolve_python_executable(python_executable)
             cmd = [python_executable, "-m", "pip", *cmd[1:]]
 
         if dry_run:
@@ -489,6 +492,23 @@ def auto_fix(
         print(f"🔧 Installing {label}...")
         try:
             subprocess.run(cmd, check=True, capture_output=True, text=True, errors="replace")
+            verified_runtime = collect_runtime_diagnostics(python_executable)
+            verified_checks = [
+                entry
+                for entry in verified_runtime["checks"]
+                if entry.get("check") == fix_key
+            ]
+            if verified_runtime.get("unavailable") or not any(
+                entry.get("status") == "OK" for entry in verified_checks
+            ):
+                result["failed"].append(
+                    {
+                        "label": label,
+                        "error": "pip exited successfully, but the dependency was not verified in the selected interpreter",
+                    }
+                )
+                print(f"   ❌ Could not verify {label} after installation")
+                continue
             result["fixed"].append(label)
             print(f"   ✅ {label} installed")
         except subprocess.CalledProcessError as e:

@@ -9,6 +9,7 @@ import importlib.metadata
 import json
 import os
 import platform
+import shutil
 import sqlite3
 import subprocess
 import sys
@@ -16,8 +17,16 @@ from pathlib import Path
 from typing import Any
 
 
+def resolve_python_executable(python_executable: str) -> str:
+    """Resolve PATH names as subprocesses do while preserving explicit paths."""
+    expanded = os.path.expanduser(python_executable)
+    if os.path.dirname(expanded):
+        return os.path.abspath(expanded)
+    return shutil.which(expanded) or expanded
+
+
 def _collect_target_runtime_diagnostics(python_executable: str) -> dict[str, Any]:
-    executable = os.path.abspath(os.path.expanduser(python_executable))
+    executable = resolve_python_executable(python_executable)
     display_name = Path(executable).name or "python"
     script = (
         "import json; "

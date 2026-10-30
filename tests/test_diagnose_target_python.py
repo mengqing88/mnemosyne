@@ -120,6 +120,11 @@ def test_auto_fix_uses_selected_python_module_pip(monkeypatch, tmp_path):
         "run",
         lambda command, **kwargs: calls.append((command, kwargs)) or SimpleNamespace(stderr=""),
     )
+    monkeypatch.setattr(
+        diagnose,
+        "collect_runtime_diagnostics",
+        lambda python=None: {"checks": [{"check": "fastembed", "status": "OK"}]},
+    )
 
     result = diagnose.auto_fix(
         [{"check": "fastembed", "status": "MISSING"}],
@@ -134,6 +139,56 @@ def test_auto_fix_uses_selected_python_module_pip(monkeypatch, tmp_path):
         "install",
         "mnemosyne-memory[embeddings]",
     ]
+
+
+def test_auto_fix_does_not_claim_success_when_isolated_check_still_fails(
+    monkeypatch, tmp_path, capsys
+):
+    target_python = tmp_path / "provider env" / "python.exe"
+    calls = []
+    monkeypatch.setattr(
+        diagnose.subprocess,
+        "run",
+        lambda command, **kwargs: calls.append((command, kwargs)) or SimpleNamespace(stderr=""),
+    )
+    monkeypatch.setattr(
+        diagnose,
+        "collect_runtime_diagnostics",
+        lambda python=None: {"checks": [{"check": "sqlite_vec", "status": "MISSING"}]},
+    )
+
+    result = diagnose.auto_fix(
+        [{"check": "sqlite_vec", "status": "MISSING"}],
+        python_executable=str(target_python),
+    )
+
+    assert result["fixed"] == []
+    assert result["failed"] == [
+        {
+            "label": "sqlite-vec (vector search)",
+            "error": "pip exited successfully, but the dependency was not verified in the selected interpreter",
+        }
+    ]
+    assert calls[0][0][0] == str(target_python.resolve())
+    assert "Could not verify sqlite-vec" in capsys.readouterr().out
+
+
+def test_target_python_bare_name_resolves_through_path(monkeypatch):
+    resolved = "C:/venvs/provider/Scripts/python.exe"
+    monkeypatch.setattr(
+        "mnemosyne.runtime_diagnostics.shutil.which",
+        lambda executable: resolved if executable == "python" else None,
+    )
+    commands = []
+    monkeypatch.setattr(
+        "mnemosyne.runtime_diagnostics.subprocess.run",
+        lambda command, **kwargs: commands.append(command)
+        or SimpleNamespace(returncode=1, stdout="", stderr=""),
+    )
+
+    diagnose.collect_runtime_diagnostics("python")
+
+    assert commands[0][0] == resolved
 
 
 def test_auto_fix_dry_run_uses_selected_python_basename(monkeypatch, tmp_path):
