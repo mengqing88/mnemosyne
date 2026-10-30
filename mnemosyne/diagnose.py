@@ -491,7 +491,7 @@ def auto_fix(
 
         print(f"🔧 Installing {label}...")
         try:
-            subprocess.run(cmd, check=True, capture_output=True, text=True, errors="replace")
+            subprocess.run(cmd, check=True, capture_output=True, text=True, errors="replace", timeout=600)
             verified_runtime = collect_runtime_diagnostics(python_executable)
             verified_checks = [
                 entry
@@ -514,6 +514,9 @@ def auto_fix(
         except subprocess.CalledProcessError as e:
             result["failed"].append({"label": label, "error": e.stderr.strip()})
             print(f"   ❌ Failed: {e.stderr.strip()[:200]}")
+        except subprocess.TimeoutExpired:
+            result["failed"].append({"label": label, "error": "pip install timed out after 600 seconds"})
+            print(f"   ❌ Timed out installing {label}")
         except FileNotFoundError:
             result["failed"].append({"label": label, "error": "pip not found"})
             print("   ❌ pip not found in PATH")

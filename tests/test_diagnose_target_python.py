@@ -1,9 +1,12 @@
 import json
 import shutil
+import subprocess
 import sys
 import venv
 from pathlib import Path
 from types import SimpleNamespace
+
+import pytest
 
 from mnemosyne import cli, diagnose
 
@@ -115,6 +118,7 @@ def test_unavailable_target_is_unknown_and_never_auto_installs(tmp_path, monkeyp
 def test_auto_fix_uses_selected_python_module_pip(monkeypatch, tmp_path):
     target_python = tmp_path / "provider env" / "python.exe"
     calls = []
+    verified_pythons = []
     monkeypatch.setattr(
         diagnose.subprocess,
         "run",
@@ -123,7 +127,8 @@ def test_auto_fix_uses_selected_python_module_pip(monkeypatch, tmp_path):
     monkeypatch.setattr(
         diagnose,
         "collect_runtime_diagnostics",
-        lambda python=None: {"checks": [{"check": "fastembed", "status": "OK"}]},
+        lambda python=None: verified_pythons.append(python)
+        or {"checks": [{"check": "fastembed", "status": "OK"}]},
     )
 
     result = diagnose.auto_fix(
@@ -139,6 +144,8 @@ def test_auto_fix_uses_selected_python_module_pip(monkeypatch, tmp_path):
         "install",
         "mnemosyne-memory[embeddings]",
     ]
+    assert calls[0][1]["timeout"] == 600
+    assert verified_pythons == [str(target_python.resolve())]
 
 
 def test_auto_fix_does_not_claim_success_when_isolated_check_still_fails(
@@ -146,6 +153,7 @@ def test_auto_fix_does_not_claim_success_when_isolated_check_still_fails(
 ):
     target_python = tmp_path / "provider env" / "python.exe"
     calls = []
+    verified_pythons = []
     monkeypatch.setattr(
         diagnose.subprocess,
         "run",
@@ -154,7 +162,8 @@ def test_auto_fix_does_not_claim_success_when_isolated_check_still_fails(
     monkeypatch.setattr(
         diagnose,
         "collect_runtime_diagnostics",
-        lambda python=None: {"checks": [{"check": "sqlite_vec", "status": "MISSING"}]},
+        lambda python=None: verified_pythons.append(python)
+        or {"checks": [{"check": "sqlite_vec", "status": "MISSING"}]},
     )
 
     result = diagnose.auto_fix(
@@ -170,7 +179,38 @@ def test_auto_fix_does_not_claim_success_when_isolated_check_still_fails(
         }
     ]
     assert calls[0][0][0] == str(target_python.resolve())
+    assert verified_pythons == [str(target_python.resolve())]
     assert "Could not verify sqlite-vec" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("selected", [False, True])
+def test_auto_fix_reports_pip_timeout_without_verifying_or_claiming_success(
+    monkeypatch, tmp_path, capsys, selected
+):
+    target = str(tmp_path / "provider" / "python.exe") if selected else None
+    calls = []
+    verified_pythons = []
+
+    def timeout(command, **kwargs):
+        calls.append((command, kwargs))
+        raise subprocess.TimeoutExpired(command, kwargs["timeout"])
+
+    monkeypatch.setattr(diagnose.subprocess, "run", timeout)
+    monkeypatch.setattr(diagnose, "collect_runtime_diagnostics",
+                        lambda python=None: verified_pythons.append(python))
+    result = diagnose.auto_fix(
+        [{"check": "sqlite_vec", "status": "MISSING"}], python_executable=target
+    )
+    assert result["fixed"] == []
+    assert result["failed"] == [{
+        "label": "sqlite-vec (vector search)",
+        "error": "pip install timed out after 600 seconds",
+    }]
+    assert calls[0][1]["timeout"] == 600
+    if selected:
+        assert calls[0][0][:3] == [str(Path(target).resolve()), "-m", "pip"]
+    assert verified_pythons == []
+    assert "Timed out installing sqlite-vec" in capsys.readouterr().out
 
 
 def test_target_python_bare_name_resolves_through_path(monkeypatch):
