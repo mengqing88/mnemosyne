@@ -650,7 +650,7 @@ retrieval; linear recall still applies its normal lexical admission rules.
 Episodic embeddings are restored from `episodic_embeddings` when present and
 supported by `sqlite-vec`. Use `mnemosyne store` for new memories. To rebuild
 vectors for existing rows, follow the [`mnemosyne reindex` workflow](cli-reference.md#health-and-repair):
-it re-embeds all memories and rebuilds the vector tables. Preview with
+it re-embeds memories with non-empty content and rebuilds the vector tables. Preview with
 `--dry-run`; run it in the intended embedding runtime with the provider/gateway
 stopped. It backs up by default unless `--no-backup` is specified.
 
