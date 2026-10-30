@@ -26,6 +26,12 @@ def resolve_python_executable(python_executable: str) -> str:
 
 
 def _collect_target_runtime_diagnostics(python_executable: str) -> dict[str, Any]:
+    """Collect a selected interpreter's checks in an isolated subprocess.
+
+    Validate the JSON response before exposing it to diagnostic consumers.
+    A failed launch, timeout, or invalid response reports an unavailable target
+    without falling back to the caller's interpreter or revealing its path.
+    """
     executable = resolve_python_executable(python_executable)
     display_name = Path(executable).name or "python"
     script = (
@@ -95,7 +101,13 @@ def _collect_target_runtime_diagnostics(python_executable: str) -> dict[str, Any
 
 
 def collect_runtime_diagnostics(python_executable: str | None = None) -> dict[str, Any]:
-    """Run pure runtime, dependency, and capability checks without a provider."""
+    """Run pure runtime, dependency, and capability checks without a provider.
+
+    By default, inspect the current interpreter. When ``python_executable`` is
+    supplied, resolve PATH names or explicit paths and run checks there with
+    Python's isolated mode. An unavailable target never falls back to the
+    current interpreter.
+    """
 
     if python_executable is not None:
         return _collect_target_runtime_diagnostics(python_executable)

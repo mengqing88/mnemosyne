@@ -472,7 +472,7 @@ def _scan_effective_defaults(env_map: dict, defaults: dict,
                 key = env_to_key.get(envvar)
                 if key is None or key in RUNTIME_CONFIG_RESOLVED_KEYS:
                     continue
-                rel = os.path.relpath(path, REPO_ROOT).replace(os.sep, "/")
+                rel = os.path.relpath(path, REPO_ROOT)
                 entry = found.setdefault(key, {"by_value": {}})
                 entry["by_value"].setdefault(value, [])
                 if rel not in entry["by_value"][value]:

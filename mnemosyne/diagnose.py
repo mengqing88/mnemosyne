@@ -445,6 +445,9 @@ def auto_fix(
     Args:
         entries: Optional list of diagnostic entries. If None, runs diagnostics first.
         dry_run: If True, report what would be fixed without installing.
+        python_executable: Optional interpreter for diagnostics and pip installs.
+            Successful installs are rechecked in its isolated runtime before
+            being reported as fixed. An unavailable target is not repaired.
 
     Returns:
         Dict with 'fixed', 'failed', 'skipped' lists and 'ran' bool.

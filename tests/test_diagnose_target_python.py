@@ -12,11 +12,13 @@ from mnemosyne import cli, diagnose
 
 
 def _check(payload, name):
+    """Find a named check in either runtime or full-diagnostic output."""
     entries = payload.get("checks") or payload.get("entries", [])
     return next(entry for entry in entries if entry["check"] == name)
 
 
 def test_runtime_checks_run_in_the_selected_venv(tmp_path, monkeypatch):
+    """Inspect a real isolated venv and keep its absolute path out of output."""
     environment = tmp_path / "provider-env"
     venv.EnvBuilder(with_pip=False).create(environment)
     python = environment / ("Scripts/python.exe" if sys.platform == "win32" else "bin/python")
@@ -43,6 +45,7 @@ def test_runtime_checks_run_in_the_selected_venv(tmp_path, monkeypatch):
 
 
 def test_default_runtime_checks_are_labeled_as_cli_interpreter(tmp_path, monkeypatch):
+    """Label checks without an explicit target as belonging to the CLI runtime."""
     monkeypatch.setattr(diagnose, "LOG_DIR", tmp_path / "logs")
     monkeypatch.setenv("MNEMOSYNE_DATA_DIR", str(tmp_path / "data"))
 
@@ -54,6 +57,7 @@ def test_default_runtime_checks_are_labeled_as_cli_interpreter(tmp_path, monkeyp
 
 
 def test_unavailable_target_does_not_fall_back_to_cli_interpreter(tmp_path):
+    """Report only the target error when the requested executable is missing."""
     missing_python = tmp_path / "missing-python"
 
     payload = diagnose.collect_runtime_diagnostics(str(missing_python))
@@ -66,6 +70,7 @@ def test_unavailable_target_does_not_fall_back_to_cli_interpreter(tmp_path):
 
 
 def test_target_payload_with_invalid_check_is_unavailable(monkeypatch):
+    """Reject malformed check entries even when the child exits successfully."""
     monkeypatch.setattr(
         "mnemosyne.runtime_diagnostics.subprocess.run",
         lambda *args, **kwargs: SimpleNamespace(
@@ -81,6 +86,7 @@ def test_target_payload_with_invalid_check_is_unavailable(monkeypatch):
 
 
 def test_target_runtime_replaces_invalid_child_output_bytes(monkeypatch):
+    """Decode child output defensively so an error remains reportable."""
     captured = {}
 
     def run(command, **kwargs):
@@ -96,6 +102,7 @@ def test_target_runtime_replaces_invalid_child_output_bytes(monkeypatch):
 
 
 def test_unavailable_target_is_unknown_and_never_auto_installs(tmp_path, monkeypatch):
+    """Leave unknown target dependencies untouched instead of attempting pip."""
     monkeypatch.setattr(diagnose, "LOG_DIR", tmp_path / "logs")
     monkeypatch.setenv("MNEMOSYNE_DATA_DIR", str(tmp_path / "data"))
     calls = []
@@ -116,6 +123,7 @@ def test_unavailable_target_is_unknown_and_never_auto_installs(tmp_path, monkeyp
 
 
 def test_auto_fix_uses_selected_python_module_pip(monkeypatch, tmp_path):
+    """Install and verify a dependency using the same selected interpreter."""
     target_python = tmp_path / "provider env" / "python.exe"
     calls = []
     verified_pythons = []
@@ -151,6 +159,7 @@ def test_auto_fix_uses_selected_python_module_pip(monkeypatch, tmp_path):
 def test_auto_fix_does_not_claim_success_when_isolated_check_still_fails(
     monkeypatch, tmp_path, capsys
 ):
+    """A successful pip exit cannot substitute for a successful isolated import."""
     target_python = tmp_path / "provider env" / "python.exe"
     calls = []
     verified_pythons = []
@@ -187,6 +196,7 @@ def test_auto_fix_does_not_claim_success_when_isolated_check_still_fails(
 def test_auto_fix_reports_pip_timeout_without_verifying_or_claiming_success(
     monkeypatch, tmp_path, capsys, selected
 ):
+    """Report pip timeouts for both runtime scopes without claiming a repair."""
     target = str(tmp_path / "provider" / "python.exe") if selected else None
     calls = []
     verified_pythons = []
@@ -214,6 +224,7 @@ def test_auto_fix_reports_pip_timeout_without_verifying_or_claiming_success(
 
 
 def test_target_python_bare_name_resolves_through_path(monkeypatch):
+    """Resolve a bare executable name through PATH before launching checks."""
     resolved = "C:/venvs/provider/Scripts/python.exe"
     monkeypatch.setattr(
         "mnemosyne.runtime_diagnostics.shutil.which",
@@ -232,6 +243,7 @@ def test_target_python_bare_name_resolves_through_path(monkeypatch):
 
 
 def test_auto_fix_dry_run_uses_selected_python_basename(monkeypatch, tmp_path):
+    """Describe a target-specific install without launching pip in dry-run mode."""
     target_python = tmp_path / "provider env" / "python.exe"
     calls = []
     monkeypatch.setattr(diagnose.subprocess, "run", lambda *args, **kwargs: calls.append(args))
@@ -249,6 +261,7 @@ def test_auto_fix_dry_run_uses_selected_python_basename(monkeypatch, tmp_path):
 
 
 def test_cli_forwards_python_to_diagnostics_and_auto_fix(monkeypatch, capsys):
+    """Use the CLI's explicit target for both diagnostics and requested repairs."""
     calls = []
 
     def run_diagnostics(**kwargs):
@@ -282,6 +295,7 @@ def test_cli_forwards_python_to_diagnostics_and_auto_fix(monkeypatch, capsys):
 
 
 def test_cli_accepts_equals_form_for_python_option(monkeypatch):
+    """Forward the target supplied with the --python=value spelling."""
     calls = []
     monkeypatch.setattr(diagnose, "run_diagnostics", lambda **kwargs: calls.append(kwargs) or {
         "runtime_scope": "target_interpreter",
