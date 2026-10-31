@@ -495,6 +495,8 @@ def auto_fix(
         print(f"🔧 Installing {label}...")
         try:
             subprocess.run(cmd, check=True, capture_output=True, text=True, errors="replace", timeout=600)
+            if python_executable is None:
+                importlib.invalidate_caches()
             verified_runtime = collect_runtime_diagnostics(python_executable)
             verified_checks = [
                 entry

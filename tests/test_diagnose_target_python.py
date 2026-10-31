@@ -309,3 +309,86 @@ def test_cli_accepts_equals_form_for_python_option(monkeypatch):
     cli.cmd_diagnose(["--python=provider/python"])
 
     assert calls[0]["python_executable"] == "provider/python"
+
+
+def test_default_auto_fix_finds_dependency_added_with_cached_directory(
+    tmp_path, monkeypatch
+):
+    """A pip success must recheck even when the directory timestamp is unchanged."""
+    import importlib
+    import os
+
+    from mnemosyne.core import embeddings
+
+    # Use the real import finder and diagnostic collector, with no installed
+    # sqlite_vec visible and no model downloads or real pip installation.
+    monkeypatch.setattr(sys, "path", [str(tmp_path)])
+    monkeypatch.delitem(sys.modules, "sqlite_vec", raising=False)
+    monkeypatch.delitem(sys.path_importer_cache, str(tmp_path), raising=False)
+    monkeypatch.setattr(embeddings, "available", lambda: False)
+    before = diagnose.collect_runtime_diagnostics()
+    assert _check(before, "sqlite_vec")["status"] == "MISSING"
+    original_stat = tmp_path.stat()
+
+    def install(command, **kwargs):
+        (tmp_path / "sqlite_vec.py").write_text(
+            "__version__ = 'newly-installed'\n", encoding="utf-8"
+        )
+        # Pin the same-mtime race deterministically instead of relying on the
+        # filesystem clock resolution or pip finishing within one clock tick.
+        os.utime(tmp_path, ns=(original_stat.st_atime_ns, original_stat.st_mtime_ns))
+        assert importlib.util.find_spec("sqlite_vec") is None
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(diagnose.subprocess, "run", install)
+    try:
+        result = diagnose.auto_fix([_check(before, "sqlite_vec")])
+        assert result["failed"] == []
+        assert result["fixed"] == ["sqlite-vec (vector search)"]
+        assert sys.modules["sqlite_vec"].__version__ == "newly-installed"
+    finally:
+        sys.modules.pop("sqlite_vec", None)
+
+
+def test_target_probe_is_isolated_and_bounded(monkeypatch, tmp_path):
+    """Keep target checks isolated from CLI imports and bound the child lifetime."""
+    calls = []
+    target = tmp_path / "provider" / "python"
+
+    def run(command, **kwargs):
+        calls.append((command, kwargs))
+        return SimpleNamespace(
+            returncode=0, stdout='MNEMOSYNE_DIAGNOSTICS={"checks":[]}\n'
+        )
+
+    monkeypatch.setattr("mnemosyne.runtime_diagnostics.subprocess.run", run)
+    result = diagnose.collect_runtime_diagnostics(str(target))
+    command, options = calls[0]
+    assert len(calls) == 1
+    assert command[:3] == [str(target.resolve()), "-I", "-c"]
+    assert len(command) == 4
+    assert options["timeout"] == 120
+    assert result["scope"] == "target_interpreter"
+    assert not result.get("unavailable")
+
+
+def test_target_probe_timeout_reports_unavailable_without_fallback(monkeypatch, tmp_path):
+    """An expired target probe reports only the target error, without path leaks."""
+    calls = []
+    target = tmp_path / "private-env" / "python"
+
+    def timeout(command, **kwargs):
+        calls.append(command)
+        raise subprocess.TimeoutExpired(command, kwargs["timeout"])
+
+    monkeypatch.setattr("mnemosyne.runtime_diagnostics.subprocess.run", timeout)
+    result = diagnose.collect_runtime_diagnostics(str(target))
+    assert len(calls) == 1
+    assert result["unavailable"] is True
+    assert result["scope"] == "target_interpreter"
+    assert result["executable"] == target.name
+    assert result["checks"] == [{
+        "category": "runtime", "check": "target_interpreter", "status": "ERROR",
+        "detail": "selected interpreter could not run Mnemosyne diagnostics",
+    }]
+    assert str(tmp_path) not in json.dumps(result)
