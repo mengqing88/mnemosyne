@@ -641,10 +641,13 @@ mnemosyne doctor --bank default --format both
 mnemosyne repair --report mnemosyne-doctor.json --select working_memory:<ID> --dry-run
 ```
 
-JSON import restores working-memory rows without generating new embeddings or
-rebuilding `vec_working`. When the export contains `legacy_embeddings`, their
-`memory_embeddings` vectors are restored and can serve working-memory vector
-recall through the JSON fallback when the dedicated index yields no candidates.
+JSON import restores working-memory rows without generating new embeddings.
+Newly restored `legacy_embeddings` do not populate `vec_working` in that import
+pass. Existing vectors in the destination's `memory_embeddings` can be backfilled
+into `vec_working`, including during a repeated import. When the export contains
+`legacy_embeddings`, their `memory_embeddings` vectors are restored and can serve
+working-memory vector recall through the JSON fallback when the dedicated index
+yields no candidates.
 Rows without exported vectors need embedding/index generation before dense
 retrieval; linear recall still applies its normal lexical admission rules.
 Episodic embeddings are restored from `episodic_embeddings` when present and
